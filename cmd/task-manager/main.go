@@ -1,95 +1,120 @@
 package main
 
 import (
-	"bufio"
-	"fmt"
-	"os"
+	"encoding/json"
+	"log"
+	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/kirillat6/go-basis/internal/task"
 )
 
-
 func main() {
-	tasks := task.TaskManager{}
-	reader := bufio.NewReader(os.Stdin)
-	for {
-		fmt.Println("Выберите действие:")
-		fmt.Println("1. Добавить Задачу")
-		fmt.Println("2. Удалить Задачу")
-		fmt.Println("3. Выполнить Задачу")
-		fmt.Println("4. Просмотреть все задачи")
-		fmt.Print("Введите ваш вариант: ")
-		num, err := reader.ReadString('\n')
+	tm := task.NewTaskManager()
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /tasks", func(w http.ResponseWriter, r *http.Request){
+		w.Header().Set("Content-Type", "application/json")
+		tasks := tm.GetTasks()
+		err := json.NewEncoder(w).Encode(tasks)
 		if err != nil {
-			fmt.Println("Такого варианта нет!")
-			continue
+			http.Error(w, "{\"message\": \"Произошла ошибка на сервере\"}", http.StatusInternalServerError)
+			return
 		}
-
-		num = strings.TrimSpace(num)
-
-		n, err := strconv.Atoi(num)
+	})
+	mux.HandleFunc("GET /tasks/{id}", func(w http.ResponseWriter, r *http.Request){
+		strId := r.PathValue("id")
+		if strId == "" {
+			http.Error(w, "{\"message\": \"Задача с таким id не найден!\"}", http.StatusNotFound)
+			return
+		}
+		id, err := strconv.Atoi(strId)
 		if err != nil {
-			fmt.Println("Введите число")
-			continue
+			http.Error(w, "{\"message\": \"ID должен быть цифрой!\"}", http.StatusBadRequest)
+			return
+		}
+		task, err := tm.GetTask(id)
+		if err != nil {
+			http.Error(w, "{\"message\": \"Задача с таким id не найден!\"}", http.StatusNotFound)
+			return
+		}
+		err = json.NewEncoder(w).Encode(task)
+		if err != nil {
+			http.Error(w, "{\"message\":\"Проблема кодировки\"}", http.StatusInternalServerError)
+			return
+		}
+	})
+	mux.HandleFunc("POST /tasks", func(w http.ResponseWriter, r *http.Request){
+		var req task.TaskRequest
+		err := json.NewDecoder(r.Body).Decode(&req)
+		if err != nil {
+			http.Error(w, "{\"message\": \"Некорректный формат JSON\"}", http.StatusBadRequest)
+			return
+		}
+		if strings.TrimSpace(req.Title) == "" {
+			http.Error(w, "{\"message\": \"Поле title не может быть пустым\"}", http.StatusBadRequest)
+			return
 		}
 
-		if n == 1 {
-			fmt.Print("Введите название задачи: ")
-			title, err := reader.ReadString('\n')
-			if err != nil {
-				fmt.Println("Считывание ответа прошло не успешно")
-				continue
-			}
-			title = strings.TrimSpace(title)
-			tasks.CreateTask(title)
+		task := tm.CreateTask(req.Title)
+		w.WriteHeader(http.StatusCreated)
+		err = json.NewEncoder(w).Encode(task) 
+		if err != nil {
+			http.Error(w, "{\"message\":\"Проблема кодировки\"}", http.StatusInternalServerError)
+			return
 		}
-		if n == 2 {
-			fmt.Print("Введите номер задачи: ")
-			strId, err := reader.ReadString('\n')
-			if err != nil {
-				fmt.Println("Считывание ответа прошло не успешно")
-				continue
-			}
-			strId = strings.TrimSpace(strId)
-			id, err := strconv.Atoi(strId)
-			if err != nil {
-				fmt.Println("Преобразование id прошло не успешно")
-				continue
-			}
-			err = tasks.DeleteTask(id)
-			if err != nil {
-				fmt.Println("Задача не найдена!")
-				continue
-			}
+	})
+	mux.HandleFunc("DELETE /tasks/{id}", func(w http.ResponseWriter, r *http.Request){
+		strId := r.PathValue("id")
+		if strId == "" {
+			http.Error(w, "{\"message\": \"Задача с таким id не найден!\"}", http.StatusNotFound)
+			return
 		}
-		if n == 3 {
-			fmt.Print("Введите номер задачи: ")
-			strId, err := reader.ReadString('\n')
+		id, err := strconv.Atoi(strId)
+		if err != nil {
+			http.Error(w, "{\"message\": \"ID должен быть цифрой!\"}", http.StatusBadRequest)
+			return
+		}
+		err = tm.DeleteTask(id)
+		if err != nil {
+			http.Error(w, "{\"message\": \"Задача с таким id не найден!\"}", http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("PATCH /tasks/{id}", func(w http.ResponseWriter, r *http.Request){
+		var req = task.TaskPatchRequest{}
+		err := json.NewDecoder(r.Body).Decode(&req)
+		if err != nil {
+			http.Error(w, "{\"message\": \"Некорректный формат JSON\"}", http.StatusBadRequest)
+			return
+		}
+		strId := r.PathValue("id")
+		if strId == "" {
+			http.Error(w, "{\"message\": \"Задача с таким id не найден!\"}", http.StatusNotFound)
+			return
+		}
+		id, err := strconv.Atoi(strId)
+		if err != nil {
+			http.Error(w, "{\"message\": \"ID должен быть цифрой!\"}", http.StatusBadRequest)
+			return
+		}
 
-			if err != nil {
-				fmt.Println("Считывание ответа прошло не успешно")
-				continue
-			}
-			strId = strings.TrimSpace(strId)
+		var titlePtr *string
+		if req.Title != nil {
+			trimmed := strings.TrimSpace(*req.Title)
+			titlePtr  = &trimmed
+		}
 
-			id, err := strconv.Atoi(strId)
-			if err != nil {
-				fmt.Println("Преобразование id прошло не успешно")
-				continue
-			}
-			err = tasks.CompleteTask(id)
-			if err != nil {
-				fmt.Println("Задача не найдена!")
-				continue
-			}
+		err = tm.ChangeTask(id, req.Completed, titlePtr)
+		if err != nil {
+			http.Error(w, "{\"message\": \"Задача с таким id не найден!\"}", http.StatusNotFound)
+			return
 		}
-		if n == 4 {
-			allTasks := tasks.GetTasks()
-			for _,task := range allTasks {
-				fmt.Println(task)
-			}
-		}
+		w.WriteHeader(http.StatusOK)
+	})
+	err := http.ListenAndServe(":8080", mux)
+	if err != nil {
+		log.Fatal("Сервер завершил работу с ошибкой!")
 	}
 }
