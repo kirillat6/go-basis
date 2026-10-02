@@ -1,120 +1,70 @@
 package main
 
 import (
-	"encoding/json"
+	"context"
+	"errors"
 	"log"
 	"net/http"
-	"strconv"
-	"strings"
+	"os"
+	"os/signal"
+	"time"
 
-	"github.com/kirillat6/go-basis/internal/task"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/joho/godotenv"
+	"github.com/kirillat6/go-basis/internal/config"
+	"github.com/kirillat6/go-basis/internal/repository"
+	"github.com/kirillat6/go-basis/internal/server"
 )
 
 func main() {
-	tm := task.NewTaskManager()
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /tasks", func(w http.ResponseWriter, r *http.Request){
-		w.Header().Set("Content-Type", "application/json")
-		tasks := tm.GetTasks()
-		err := json.NewEncoder(w).Encode(tasks)
-		if err != nil {
-			http.Error(w, "{\"message\": \"Произошла ошибка на сервере\"}", http.StatusInternalServerError)
-			return
-		}
-	})
-	mux.HandleFunc("GET /tasks/{id}", func(w http.ResponseWriter, r *http.Request){
-		strId := r.PathValue("id")
-		if strId == "" {
-			http.Error(w, "{\"message\": \"Задача с таким id не найден!\"}", http.StatusNotFound)
-			return
-		}
-		id, err := strconv.Atoi(strId)
-		if err != nil {
-			http.Error(w, "{\"message\": \"ID должен быть цифрой!\"}", http.StatusBadRequest)
-			return
-		}
-		task, err := tm.GetTask(id)
-		if err != nil {
-			http.Error(w, "{\"message\": \"Задача с таким id не найден!\"}", http.StatusNotFound)
-			return
-		}
-		err = json.NewEncoder(w).Encode(task)
-		if err != nil {
-			http.Error(w, "{\"message\":\"Проблема кодировки\"}", http.StatusInternalServerError)
-			return
-		}
-	})
-	mux.HandleFunc("POST /tasks", func(w http.ResponseWriter, r *http.Request){
-		var req task.TaskRequest
-		err := json.NewDecoder(r.Body).Decode(&req)
-		if err != nil {
-			http.Error(w, "{\"message\": \"Некорректный формат JSON\"}", http.StatusBadRequest)
-			return
-		}
-		if strings.TrimSpace(req.Title) == "" {
-			http.Error(w, "{\"message\": \"Поле title не может быть пустым\"}", http.StatusBadRequest)
-			return
-		}
-
-		task := tm.CreateTask(req.Title)
-		w.WriteHeader(http.StatusCreated)
-		err = json.NewEncoder(w).Encode(task) 
-		if err != nil {
-			http.Error(w, "{\"message\":\"Проблема кодировки\"}", http.StatusInternalServerError)
-			return
-		}
-	})
-	mux.HandleFunc("DELETE /tasks/{id}", func(w http.ResponseWriter, r *http.Request){
-		strId := r.PathValue("id")
-		if strId == "" {
-			http.Error(w, "{\"message\": \"Задача с таким id не найден!\"}", http.StatusNotFound)
-			return
-		}
-		id, err := strconv.Atoi(strId)
-		if err != nil {
-			http.Error(w, "{\"message\": \"ID должен быть цифрой!\"}", http.StatusBadRequest)
-			return
-		}
-		err = tm.DeleteTask(id)
-		if err != nil {
-			http.Error(w, "{\"message\": \"Задача с таким id не найден!\"}", http.StatusNotFound)
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
-	})
-	mux.HandleFunc("PATCH /tasks/{id}", func(w http.ResponseWriter, r *http.Request){
-		var req = task.TaskPatchRequest{}
-		err := json.NewDecoder(r.Body).Decode(&req)
-		if err != nil {
-			http.Error(w, "{\"message\": \"Некорректный формат JSON\"}", http.StatusBadRequest)
-			return
-		}
-		strId := r.PathValue("id")
-		if strId == "" {
-			http.Error(w, "{\"message\": \"Задача с таким id не найден!\"}", http.StatusNotFound)
-			return
-		}
-		id, err := strconv.Atoi(strId)
-		if err != nil {
-			http.Error(w, "{\"message\": \"ID должен быть цифрой!\"}", http.StatusBadRequest)
-			return
-		}
-
-		var titlePtr *string
-		if req.Title != nil {
-			trimmed := strings.TrimSpace(*req.Title)
-			titlePtr  = &trimmed
-		}
-
-		err = tm.ChangeTask(id, req.Completed, titlePtr)
-		if err != nil {
-			http.Error(w, "{\"message\": \"Задача с таким id не найден!\"}", http.StatusNotFound)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-	})
-	err := http.ListenAndServe(":8080", mux)
+	ctx := context.Background()
+	err := godotenv.Load()
 	if err != nil {
-		log.Fatal("Сервер завершил работу с ошибкой!")
+		log.Fatal("Не удалось загрузить .env файлы")
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatal("Ошибка конфигурации:", err)
+	}
+
+	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	if err != nil {
+		log.Fatal("Ошибка подключения к БД")
+	}
+	defer pool.Close()
+	err = pool.Ping(ctx)
+	if err != nil {
+		log.Fatal("Ошибка подключения к БД")
+	}
+	repo := repository.NewTaskRepository(pool)
+
+	serv := server.New(repo, cfg)
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt)
+
+	
+	go func(){
+		err := serv.ListenAndServe()
+		if errors.Is(err, http.ErrServerClosed) {
+			log.Println("Сервер завершил работу...")
+		} else {
+			log.Fatal("Ошибка сервера:", err)
+		}
+	}()
+	<-stop
+	log.Println("Получен сигнал завершения. Останавливаем сервер...")
+	
+	shutdownCtx, cancel := context.WithTimeout(
+		ctx,
+		5 * time.Second,
+	)
+	defer cancel()
+
+	err = serv.Shutdown(shutdownCtx)
+	if err != nil {
+		log.Printf("Ошибка при остановку сервера: %v", err)
 	}
 }
+
