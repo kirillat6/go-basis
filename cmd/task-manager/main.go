@@ -20,7 +20,7 @@ func main() {
 	ctx := context.Background()
 	err := godotenv.Load()
 	if err != nil {
-		log.Fatal("Не удалось загрузить .env файлы")
+		log.Println(".env файл не найден, используются переменные окружения")
 	}
 
 	cfg, err := config.Load()
@@ -44,8 +44,7 @@ func main() {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt)
 
-	
-	go func(){
+	go func() {
 		err := serv.ListenAndServe()
 		if errors.Is(err, http.ErrServerClosed) {
 			log.Println("Сервер завершил работу...")
@@ -55,10 +54,10 @@ func main() {
 	}()
 	<-stop
 	log.Println("Получен сигнал завершения. Останавливаем сервер...")
-	
+
 	shutdownCtx, cancel := context.WithTimeout(
 		ctx,
-		5 * time.Second,
+		5*time.Second,
 	)
 	defer cancel()
 
@@ -67,4 +66,3 @@ func main() {
 		log.Printf("Ошибка при остановку сервера: %v", err)
 	}
 }
-

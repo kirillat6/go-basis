@@ -1,5 +1,7 @@
 package task
 
+import "context"
+
 type Task struct {
 	ID        int    `json:"id"`
 	Title     string `json:"title"`
@@ -12,4 +14,8 @@ type TaskRequest struct {
 type TaskPatchRequest struct {
 	Title     *string `json:"title"`
 	Completed *bool   `json:"completed"`
+}
+
+type TaskService interface {
+	GetTask(ctx context.Context, id int) (*Task, error)
 }

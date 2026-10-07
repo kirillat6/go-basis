@@ -15,7 +15,7 @@ type TaskRepository struct {
 	db *pgxpool.Pool
 }
 
-func NewTaskRepository(db *pgxpool.Pool) *TaskRepository{
+func NewTaskRepository(db *pgxpool.Pool) *TaskRepository {
 	return &TaskRepository{
 		db: db,
 	}
@@ -102,7 +102,7 @@ func (r *TaskRepository) GetTask(ctx context.Context, id int) (task.Task, error)
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return task.Task{}, fmt.Errorf("Задача не найдена: %w",errs.ErrNotFound)
+			return task.Task{}, fmt.Errorf("Задача не найдена: %w", errs.ErrNotFound)
 		}
 		return task.Task{}, err
 	}
